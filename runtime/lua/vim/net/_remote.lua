@@ -37,11 +37,87 @@ function M.get_system_info(uri)
   return os, arch
 end
 
+local function check_and_install(uri, os, arch)
+  local v = vim.version()
+  local version_str = string.format('v%d.%d.%d', v.major, v.minor, v.patch)
+  if v.prerelease then
+    version_str = 'nightly'
+  end
+
+  local os_map = { linux = 'linux', darwin = 'macos' }
+  local arch_map = { x86_64 = 'x86_64', aarch64 = 'arm64', arm64 = 'arm64' }
+
+  local target_os = os_map[os]
+  local target_arch = arch_map[arch]
+  if not target_os or not target_arch then
+    error(string.format('Unsupported OS/Arch combination: %s/%s', os, arch))
+  end
+
+  local release_file = string.format('nvim-%s-%s.tar.gz', target_os, target_arch)
+  local release_url =
+    string.format('https://github.com/neovim/neovim/releases/latest/download/%s', release_file)
+  if version_str == 'nightly' then
+    release_url =
+      string.format('https://github.com/neovim/neovim/releases/download/nightly/%s', release_file)
+  end
+
+  local remote_script = string.format(
+    [[
+    TARGET_VER="%s"
+    INSTALL_DIR="$HOME/.local/share/nvim-remote"
+    BIN_DIR="$HOME/.local/bin"
+
+    mkdir -p "$BIN_DIR"
+    mkdir -p "$INSTALL_DIR"
+
+    if [ -x "$BIN_DIR/nvim" ]; then
+      CURRENT_VER=$("$BIN_DIR/nvim" -v | head -n1 | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+')
+      if [ "$CURRENT_VER" = "$TARGET_VER" ] || [ "$TARGET_VER" = "nightly" ]; then
+        exit 0
+      fi
+    fi
+
+    echo "Installing Neovim $TARGET_VER..." >&2
+    cd "$INSTALL_DIR" || exit 1
+    curl -fLo nvim.tar.gz "%s" || wget -O nvim.tar.gz "%s" || exit 1
+    rm -rf nvim-%s-%s
+    tar -xzf nvim.tar.gz || exit 1
+    ln -sf "$INSTALL_DIR/nvim-%s-%s/bin/nvim" "$BIN_DIR/nvim"
+  ]],
+    version_str,
+    release_url,
+    release_url,
+    target_os,
+    target_arch,
+    target_os,
+    target_arch
+  )
+
+  local ssh_cmd = { 'ssh', '-T' }
+  if uri.port then
+    table.insert(ssh_cmd, '-p')
+    table.insert(ssh_cmd, uri.port)
+  end
+  local target = uri.host
+  if uri.user then
+    target = uri.user .. '@' .. uri.host
+  end
+  table.insert(ssh_cmd, target)
+  table.insert(ssh_cmd, remote_script)
+
+  local obj = vim.system(ssh_cmd, { text = true }):wait()
+  if obj.code ~= 0 then
+    error('Installation failed: ' .. (obj.stderr or ''))
+  end
+end
+
 --- @param uri_str string
 --- @return string local_socket path to the local forwarded socket
 function M.start(uri_str)
   local uri = ssh.parse_uri(uri_str)
   local os, arch = M.get_system_info(uri)
+
+  check_and_install(uri, os, arch)
 
   error('Not implemented yet')
 end
