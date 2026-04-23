@@ -350,6 +350,34 @@ int main(int argc, char **argv)
                    use_builtin_ui);
   }
 
+  if (params.remote_ssh) {
+    embedded_mode = true;
+
+    typval_T argvars[2];
+    argvars[0].v_type = VAR_STRING;
+    argvars[0].vval.v_string = params.remote_ssh;
+    argvars[1].v_type = VAR_UNKNOWN;
+
+    typval_T rettv;
+    tv_clear(&rettv);
+
+    nlua_call_vimfn("vim.net._remote", "start", argvars, &rettv);
+
+    if (rettv.v_type == VAR_STRING && rettv.vval.v_string != NULL) {
+      const char *connect_error = NULL;
+      uint64_t chan = server_connect(rettv.vval.v_string, &connect_error);
+      if (!chan) {
+        fprintf(stderr, "Remote UI failed to connect: %s\n", connect_error);
+        os_exit(1);
+      }
+      ui_client_channel_id = chan;
+    } else {
+      fprintf(stderr, "Remote SSH failed to establish connection or socket not ready.\n");
+      os_exit(1);
+    }
+    tv_clear(&rettv);
+  }
+
   bool remote_ui = (ui_client_channel_id != 0);
 
   if (use_builtin_ui && !remote_ui) {
@@ -1176,6 +1204,9 @@ static void command_line_scan(mparm_T *parmp)
           argv_idx += 6;
         } else if (STRNICMP(argv[0] + argv_idx, "literal", 7) == 0) {
           // Do nothing: file args are always literal. #7679
+        } else if (STRNICMP(argv[0] + argv_idx, "remote-ssh", 10) == 0) {
+          want_argument = true;
+          argv_idx += 10;
         } else if (STRNICMP(argv[0] + argv_idx, "remote", 6) == 0) {
           parmp->remote = parmp->argc - argc;
         } else if (STRNICMP(argv[0] + argv_idx, "server", 6) == 0) {
@@ -1415,6 +1446,9 @@ static void command_line_scan(mparm_T *parmp)
           } else if (strequal(argv[-1], "--server")) {
             // "--server {address}"
             parmp->server_addr = argv[0];
+          } else if (strequal(argv[-1], "--remote-ssh")) {
+            // "--remote-ssh {uri}"
+            parmp->remote_ssh = argv[0];
           }
           // "--startuptime <file>" already handled
           break;
