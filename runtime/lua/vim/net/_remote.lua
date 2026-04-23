@@ -2,6 +2,76 @@ local M = {}
 
 local ssh = require('vim.net._ssh')
 
+--- @param ssh_cmd string[]
+--- @param wait boolean
+--- @return table { code = number, stdout = string, job_id = number }
+local function exec_ssh(ssh_cmd, wait)
+  local stdout_lines = {}
+  local is_done = false
+  local code = -1
+  local buffer = ''
+
+  local on_stdout = function(j, data, _)
+    if not data then
+      return
+    end
+    for i, chunk in ipairs(data) do
+      if i < #data then
+        table.insert(stdout_lines, buffer .. chunk)
+        buffer = ''
+      else
+        buffer = buffer .. chunk
+      end
+    end
+
+    local text = table.concat(data, '\n')
+    if text:match('[Pp]assword:') or text:match('passphrase') then
+      vim.schedule(function()
+        vim.ui.input({ prompt = vim.trim(text) .. ' ', secret = true }, function(input)
+          if input then
+            vim.fn.chansend(j, input .. '\n')
+          else
+            vim.fn.jobstop(j)
+          end
+        end)
+      end)
+    end
+  end
+
+  local on_exit = function(_, exit_code, _)
+    code = exit_code
+    is_done = true
+  end
+
+  local job_id = vim.fn.jobstart(ssh_cmd, {
+    pty = true,
+    on_stdout = on_stdout,
+    on_exit = on_exit,
+  })
+
+  if job_id <= 0 then
+    error('Failed to start SSH job')
+  end
+
+  if wait then
+    local success = vim.wait(300000, function()
+      return is_done
+    end, 50)
+    if not success then
+      vim.fn.jobstop(job_id)
+      error('SSH command timed out')
+    end
+    if buffer ~= '' then
+      table.insert(stdout_lines, buffer)
+    end
+    local raw_stdout = table.concat(stdout_lines, '\n')
+    local clean_stdout = string.gsub(raw_stdout, '\r', '')
+    return { code = code, stdout = clean_stdout }
+  else
+    return { job_id = job_id }
+  end
+end
+
 --- @param uri table
 --- @return string os, string arch
 function M.get_system_info(uri)
@@ -17,21 +87,30 @@ function M.get_system_info(uri)
   table.insert(ssh_cmd, target)
   table.insert(ssh_cmd, 'uname -s && uname -m')
 
-  local obj = vim.system(ssh_cmd, { text = true }):wait()
+  local obj = exec_ssh(ssh_cmd, true)
   if obj.code ~= 0 then
-    error('Failed to detect remote system info: ' .. (obj.stderr or ''))
+    error('Failed to detect remote system info: ' .. obj.stdout)
   end
 
   local lines = vim.split(vim.trim(obj.stdout), '\n', { plain = true })
-  if #lines < 2 then
+  -- password prompt itself might pollute stdout from the PTY
+  -- we should extract the last 2 non-empty lines
+  local valid_lines = {}
+  for _, line in ipairs(lines) do
+    if vim.trim(line) ~= '' and not line:match('[Pp]assword:') and not line:match('passphrase') then
+      table.insert(valid_lines, vim.trim(line))
+    end
+  end
+
+  if #valid_lines < 2 then
     error('Unexpected output from system info detection: ' .. obj.stdout)
   end
 
-  local os = vim.trim(lines[1]):lower()
-  local arch = vim.trim(lines[2]):lower()
+  local os = valid_lines[#valid_lines - 1]:lower()
+  local arch = valid_lines[#valid_lines]:lower()
 
   if os:match('msys') or os:match('windows') or os:match('mingw') or os:match('cygwin') then
-    error('Not implemented yet')
+    error('Not implemented yet: Windows targets are not supported.')
   end
 
   return os, arch
@@ -105,9 +184,9 @@ local function check_and_install(uri, os, arch)
   table.insert(ssh_cmd, target)
   table.insert(ssh_cmd, remote_script)
 
-  local obj = vim.system(ssh_cmd, { text = true }):wait()
+  local obj = exec_ssh(ssh_cmd, true)
   if obj.code ~= 0 then
-    error('Installation failed: ' .. (obj.stderr or ''))
+    error('Installation failed: ' .. obj.stdout)
   end
 end
 
@@ -119,7 +198,36 @@ function M.start(uri_str)
 
   check_and_install(uri, os, arch)
 
-  error('Not implemented yet')
+  local local_sock = vim.fn.tempname() .. '_remote_nvim.sock'
+
+  local ssh_cmd = { 'ssh', '-T', '-L', local_sock .. ':/tmp/nvim.sock' }
+  if uri.port then
+    table.insert(ssh_cmd, '-p')
+    table.insert(ssh_cmd, uri.port)
+  end
+  local target = uri.host
+  if uri.user then
+    target = uri.user .. '@' .. uri.host
+  end
+  table.insert(ssh_cmd, target)
+
+  local remote_cmd = '~/.local/bin/nvim --headless --listen /tmp/nvim.sock'
+  table.insert(ssh_cmd, remote_cmd)
+
+  -- start the tunnel async
+  local obj = exec_ssh(ssh_cmd, false)
+  local job_id = obj.job_id
+
+  local max_retries = 25
+  for _ = 1, max_retries do
+    if vim.uv.fs_stat(local_sock) then
+      return local_sock
+    end
+    vim.uv.sleep(200)
+  end
+
+  vim.fn.jobstop(job_id)
+  error('Failed to establish SSH tunnel or socket not ready')
 end
 
 return M
