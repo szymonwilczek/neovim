@@ -234,4 +234,26 @@ function M.get_hosts()
   return M.parse_config(config_path)
 end
 
+---@param str string
+---@return table
+function M.parse_uri(str)
+  local uri = {}
+  local scheme_match = str:match('^ssh://(.*)')
+  if scheme_match then
+    str = scheme_match
+  end
+  local user_match = str:match('^(.-)@(.*)')
+  if user_match then
+    uri.user = str:match('^(.-)@')
+    str = str:match('@(.*)')
+  end
+  local port_match = str:match(':(%d+)$')
+  if port_match then
+    uri.port = port_match
+    str = str:sub(1, -(#port_match + 2))
+  end
+  uri.host = str
+  return uri
+end
+
 return M
