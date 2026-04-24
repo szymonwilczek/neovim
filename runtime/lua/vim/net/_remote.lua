@@ -329,11 +329,13 @@ function M.start(uri_str)
     env_vars = 'env XDG_CONFIG_HOME=' .. vim.fn.shellescape(remote_base_dir)
   end
 
+  local cleanup_dirs = remote_base_dir and ('rm -rf ' .. vim.fn.shellescape(remote_base_dir)) or ''
   local remote_cmd = string.format(
     [[
     rm -f /tmp/nvim.sock
     %s ~/.local/bin/nvim --headless --listen /tmp/nvim.sock &
     NVIM_PID=$!
+    trap 'kill $NVIM_PID 2>/dev/null; rm -f /tmp/nvim.sock; %s' EXIT
     while [ ! -S /tmp/nvim.sock ]; do
       if ! kill -0 $NVIM_PID 2>/dev/null; then
         echo "NVIM_CRASHED"
@@ -344,7 +346,8 @@ function M.start(uri_str)
     echo "NVIM_READY"
     wait $NVIM_PID
   ]],
-    env_vars
+    env_vars,
+    cleanup_dirs
   )
 
   table.insert(ssh_cmd, 'bash')
@@ -356,6 +359,15 @@ function M.start(uri_str)
   if obj.stdout:match('NVIM_CRASHED') then
     error('Remote Neovim crashed during startup')
   end
+
+  vim.api.nvim_create_autocmd('VimLeavePre', {
+    callback = function()
+      local stop_cmd = get_base_ssh_cmd(uri)
+      table.insert(stop_cmd, '-O')
+      table.insert(stop_cmd, 'exit')
+      vim.system(stop_cmd):wait()
+    end,
+  })
 
   return local_sock
 end
