@@ -2,6 +2,8 @@ local M = {}
 
 local ssh = require('vim.net._ssh')
 
+local ssh_password = nil
+
 --- @param ssh_cmd string[]
 --- @param wait boolean
 --- @return table { code = number, stdout = string, job_id = number }
@@ -27,10 +29,10 @@ local function exec_ssh(ssh_cmd, wait)
     local text = table.concat(data, '\n')
     if text:match('[Pp]assword:') or text:match('passphrase') then
       vim.schedule(function()
-        local is_headless = #vim.api.nvim_list_uis() == 0
+        local is_headless = #vim.api.nvim_list_uis() == 0 and vim.env.NVIM_TEST_MOCK_UI ~= '1'
         if is_headless then
-          if _G._remote_ssh_password then
-            vim.fn.chansend(j, _G._remote_ssh_password .. '\n')
+          if ssh_password then
+            vim.fn.chansend(j, ssh_password .. '\n')
             return
           end
 
@@ -51,19 +53,19 @@ local function exec_ssh(ssh_cmd, wait)
 
           if input then
             input = input:gsub('\r', '')
-            _G._remote_ssh_password = input
+            ssh_password = input
             vim.fn.chansend(j, input .. '\n')
           else
             vim.fn.jobstop(j)
           end
         else
-          if _G._remote_ssh_password then
-            vim.fn.chansend(j, _G._remote_ssh_password .. '\n')
+          if ssh_password then
+            vim.fn.chansend(j, ssh_password .. '\n')
             return
           end
           vim.ui.input({ prompt = vim.trim(text) .. ' ', secret = true }, function(input)
             if input then
-              _G._remote_ssh_password = input
+              ssh_password = input
               vim.fn.chansend(j, input .. '\n')
             else
               vim.fn.jobstop(j)
@@ -102,6 +104,17 @@ local function exec_ssh(ssh_cmd, wait)
     end
     local raw_stdout = table.concat(stdout_lines, '\n')
     local clean_stdout = string.gsub(raw_stdout, '\r', '')
+
+    if code ~= 0 then
+      if clean_stdout:match('Permission denied') or clean_stdout:match('Connection closed') then
+        io.stderr:write(
+          '\n[Remote SSH] Authentication failed! Please check your password or SSH keys.\n'
+        )
+        io.stderr:flush()
+        ssh_password = nil
+      end
+    end
+
     return { code = code, stdout = clean_stdout }
   else
     return { job_id = job_id }
@@ -226,6 +239,50 @@ local function check_and_install(uri, os, arch)
   end
 end
 
+local function sync_config(uri)
+  local config_dir = vim.fn.stdpath('config')
+  if vim.fn.isdirectory(config_dir) == 0 then
+    return nil
+  end
+
+  local remote_base_dir = '/tmp/.nvim-remote-' .. (vim.env.USER or 'user')
+  local remote_config_dir = remote_base_dir .. '/nvim'
+
+  local target = uri.host
+  if uri.user then
+    target = uri.user .. '@' .. uri.host
+  end
+
+  local tar_cmd_str = 'tar -czC '
+    .. vim.fn.shellescape(config_dir)
+    .. " --exclude='.git' --exclude='undo' --exclude='view' --exclude='session' --exclude='.lazy' --exclude='shada' ."
+
+  local remote_script = string.format(
+    'mkdir -p %s && tar -xzC %s',
+    vim.fn.shellescape(remote_config_dir),
+    vim.fn.shellescape(remote_config_dir)
+  )
+
+  local ssh_cmd_str = 'ssh -T '
+  if uri.port then
+    ssh_cmd_str = ssh_cmd_str .. '-p ' .. vim.fn.shellescape(uri.port) .. ' '
+  end
+  ssh_cmd_str = ssh_cmd_str
+    .. vim.fn.shellescape(target)
+    .. ' '
+    .. vim.fn.shellescape(remote_script)
+
+  local pipeline = tar_cmd_str .. ' | ' .. ssh_cmd_str
+
+  io.stderr:write('Syncing config to remote host...\n')
+  local obj = exec_ssh({ 'bash', '-c', pipeline }, true)
+  if obj.code ~= 0 then
+    error('Config sync failed: ' .. obj.stdout)
+  end
+
+  return remote_base_dir
+end
+
 --- @param uri_str string
 --- @return string local_socket path to the local forwarded socket
 function M.start(uri_str)
@@ -233,6 +290,8 @@ function M.start(uri_str)
   local os, arch = M.get_system_info(uri)
 
   check_and_install(uri, os, arch)
+
+  local remote_base_dir = sync_config(uri)
 
   local local_sock = vim.fn.tempname() .. '_remote_nvim.sock'
 
@@ -248,6 +307,9 @@ function M.start(uri_str)
   table.insert(ssh_cmd, target)
 
   local remote_cmd = '~/.local/bin/nvim --headless --listen /tmp/nvim.sock'
+  if remote_base_dir then
+    remote_cmd = 'env XDG_CONFIG_HOME=' .. vim.fn.shellescape(remote_base_dir) .. ' ' .. remote_cmd
+  end
   table.insert(ssh_cmd, remote_cmd)
 
   local obj = exec_ssh(ssh_cmd, false)

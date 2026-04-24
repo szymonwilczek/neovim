@@ -13,7 +13,7 @@ describe('--remote-ssh', function()
     os.remove(fake_bin_dir)
     vim.uv.fs_mkdir(fake_bin_dir, 511)
     local fake_ssh_path = fake_bin_dir .. '/ssh'
-    
+
     local script = [=[
 #!/usr/bin/env bash
 ARGS="$*"
@@ -51,16 +51,25 @@ if [[ "$ARGS" == *"TARGET_VER"* ]]; then
 ]=]) .. [=[
 fi
 
+if [[ "$ARGS" == *"mkdir -p"* ]]; then
+  echo "Config synced!" >&2
+  exit 0
+fi
+
 echo "Unexpected SSH command: $ARGS" >&2
 exit 1
 ]=]
     t.write_file(fake_ssh_path, script)
     vim.uv.fs_chmod(fake_ssh_path, 493)
 
-    n.exec_lua(string.format([[
+    n.exec_lua(string.format(
+      [[
       _G.orig_path = vim.fn.getenv('PATH')
       vim.fn.setenv('PATH', %q .. ':' .. _G.orig_path)
-    ]], fake_bin_dir))
+      vim.fn.setenv('NVIM_TEST_MOCK_UI', '1')
+    ]],
+      fake_bin_dir
+    ))
   end
 
   local function teardown_fake_ssh()
@@ -126,7 +135,7 @@ exit 1
         uname = [[
           echo "Linux"
           echo "x86_64"
-        ]]
+        ]],
       })
       local res = n.exec_lua([[
         return { require('vim.net._remote').get_system_info({ host = 'server' }) }
@@ -140,7 +149,7 @@ exit 1
         uname = [[
           echo "Darwin"
           echo "arm64"
-        ]]
+        ]],
       })
       local res = n.exec_lua([[
         return { require('vim.net._remote').get_system_info({ host = 'server' }) }
@@ -154,7 +163,7 @@ exit 1
         uname = [[
           echo "MSYS_NT-10.0-19045"
           echo "x86_64"
-        ]]
+        ]],
       })
       local status, err = pcall(function()
         n.exec_lua([[
@@ -178,10 +187,10 @@ exit 1
         local sock = require('vim.net._remote').start('user@test-server')
         return { sock, _G.inputs_requested }
       ]])
-      
+
       local sock = res[1]
       local inputs = res[2]
-      
+
       assert(sock:match('_remote_nvim%.sock$'))
       eq('Password: ', inputs[1])
     end)
