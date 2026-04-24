@@ -122,3 +122,29 @@ vim.api.nvim_create_autocmd('FileReadCmd', {
     )
   end,
 })
+
+-- Remote SSH: only available on POSIX platforms (requires ControlMaster, /tmp, bash)
+if vim.fn.has('win32') == 0 then
+  vim.api.nvim_create_user_command('RemoteSSH', function(cmd)
+    local remote = require('vim.net._remote')
+    if #cmd.fargs == 0 then
+      remote.select_and_connect()
+    else
+      remote.connect(cmd.fargs[1])
+    end
+  end, {
+    desc = 'Connect to a remote host via SSH. See :help remote-ssh',
+    nargs = '?',
+    complete = function()
+      local ok, ssh_mod = pcall(require, 'vim.net._ssh')
+      if not ok then
+        return {}
+      end
+      local ok2, hosts = pcall(ssh_mod.get_hosts)
+      if not ok2 then
+        return {}
+      end
+      return hosts
+    end,
+  })
+end

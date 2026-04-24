@@ -325,6 +325,8 @@ end
 
 --- @param uri_str string
 --- @return string local_socket path to the local forwarded socket
+--- @return vim.net.SshUri uri parsed SSH URI for cleanup
+--- @return fun() teardown function to close the SSH master connection
 function M.start(uri_str)
   local uri = ssh.parse_uri(uri_str)
   local os, arch = M.get_system_info(uri)
@@ -375,16 +377,108 @@ function M.start(uri_str)
     error('Remote Neovim crashed during startup')
   end
 
+  local cleaned_up = false
+
+  local function teardown()
+    if cleaned_up then
+      return
+    end
+    cleaned_up = true
+    local stop_cmd = get_base_ssh_cmd(uri)
+    table.insert(stop_cmd, '-O')
+    table.insert(stop_cmd, 'exit')
+    vim.system(stop_cmd):wait()
+  end
+
   vim.api.nvim_create_autocmd('VimLeavePre', {
-    callback = function()
-      local stop_cmd = get_base_ssh_cmd(uri)
-      table.insert(stop_cmd, '-O')
-      table.insert(stop_cmd, 'exit')
-      vim.system(stop_cmd):wait()
-    end,
+    callback = teardown,
   })
 
-  return local_sock
+  return local_sock, uri, teardown
+end
+
+---@param host vim.net.SshHost
+---@return string
+local function format_host(host)
+  local parts = { host.alias }
+  local details = {}
+  if host.user then
+    table.insert(details, 'user=' .. host.user)
+  end
+  if host.hostname and host.hostname ~= host.alias then
+    table.insert(details, host.hostname)
+  end
+  if host.port and host.port ~= '22' then
+    table.insert(details, 'port=' .. host.port)
+  end
+  if #details > 0 then
+    table.insert(parts, '(' .. table.concat(details, ', ') .. ')')
+  end
+  return table.concat(parts, ' ')
+end
+
+--- @param uri_str string SSH URI (e.g. "user@host", "ssh://root@server:2222")
+function M.connect(uri_str)
+  vim.validate('uri_str', uri_str, 'string')
+  if uri_str == '' then
+    error('Remote SSH: URI must not be empty')
+  end
+
+  local local_sock, _, teardown = M.start(uri_str)
+
+  vim.cmd.enew()
+  local term_buf = vim.api.nvim_get_current_buf()
+
+  vim.fn.jobstart({ vim.v.progpath, '--remote-ui', '--server', local_sock }, {
+    term = true,
+    env = { NVIM = '' },
+    on_exit = function(_, exit_code, _)
+      teardown()
+
+      vim.schedule(function()
+        if vim.api.nvim_buf_is_valid(term_buf) then
+          vim.api.nvim_buf_delete(term_buf, { force = true })
+        end
+
+        if exit_code ~= 0 then
+          vim.notify(
+            string.format('[Remote SSH] Session to %s ended with code %d', uri_str, exit_code),
+            vim.log.levels.WARN
+          )
+        end
+      end)
+    end,
+  })
+  vim.cmd.startinsert()
+end
+
+function M.select_and_connect()
+  local hosts = ssh.get_hosts_full()
+
+  if #hosts == 0 then
+    vim.ui.input({ prompt = 'SSH URI (user@host): ' }, function(input)
+      if input and input ~= '' then
+        M.connect(input)
+      end
+    end)
+    return
+  end
+
+  vim.ui.select(hosts, {
+    prompt = 'Connect to remote host:',
+    format_item = format_host,
+    kind = 'ssh_host',
+  }, function(choice)
+    if not choice then
+      return
+    end
+    ---@cast choice vim.net.SshHost
+    local target = choice.alias
+    if choice.user then
+      target = choice.user .. '@' .. target
+    end
+    M.connect(target)
+  end)
 end
 
 return M
