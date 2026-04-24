@@ -359,7 +359,7 @@ int main(int argc, char **argv)
     argvars[1].v_type = VAR_UNKNOWN;
 
     typval_T rettv;
-    tv_clear(&rettv);
+    rettv.v_type = VAR_UNKNOWN;
 
     nlua_call_vimfn("vim.net._remote", "start", argvars, &rettv);
 

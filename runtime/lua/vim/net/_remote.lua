@@ -27,13 +27,49 @@ local function exec_ssh(ssh_cmd, wait)
     local text = table.concat(data, '\n')
     if text:match('[Pp]assword:') or text:match('passphrase') then
       vim.schedule(function()
-        vim.ui.input({ prompt = vim.trim(text) .. ' ', secret = true }, function(input)
+        local is_headless = #vim.api.nvim_list_uis() == 0
+        if is_headless then
+          if _G._remote_ssh_password then
+            vim.fn.chansend(j, _G._remote_ssh_password .. '\n')
+            return
+          end
+
+          io.stderr:write('\r' .. vim.trim(text) .. ' ')
+          io.stderr:flush()
+
+          os.execute('stty -echo < /dev/tty 2>/dev/null')
+          local f = io.open('/dev/tty', 'r')
+          local input = nil
+          if f then
+            input = f:read('*l')
+            f:close()
+          else
+            input = io.read('*l')
+          end
+          os.execute('stty echo < /dev/tty 2>/dev/null')
+          io.stderr:write('\n')
+
           if input then
+            input = input:gsub('\r', '')
+            _G._remote_ssh_password = input
             vim.fn.chansend(j, input .. '\n')
           else
             vim.fn.jobstop(j)
           end
-        end)
+        else
+          if _G._remote_ssh_password then
+            vim.fn.chansend(j, _G._remote_ssh_password .. '\n')
+            return
+          end
+          vim.ui.input({ prompt = vim.trim(text) .. ' ', secret = true }, function(input)
+            if input then
+              _G._remote_ssh_password = input
+              vim.fn.chansend(j, input .. '\n')
+            else
+              vim.fn.jobstop(j)
+            end
+          end)
+        end
       end)
     end
   end
@@ -214,20 +250,19 @@ function M.start(uri_str)
   local remote_cmd = '~/.local/bin/nvim --headless --listen /tmp/nvim.sock'
   table.insert(ssh_cmd, remote_cmd)
 
-  -- start the tunnel async
   local obj = exec_ssh(ssh_cmd, false)
   local job_id = obj.job_id
 
-  local max_retries = 25
-  for _ = 1, max_retries do
-    if vim.uv.fs_stat(local_sock) then
-      return local_sock
-    end
-    vim.uv.sleep(200)
+  local success = vim.wait(15000, function()
+    return vim.uv.fs_stat(local_sock) ~= nil
+  end, 200)
+
+  if success then
+    return local_sock
   end
 
   vim.fn.jobstop(job_id)
-  error('Failed to establish SSH tunnel or socket not ready')
+  error('Socket not ready')
 end
 
 return M
