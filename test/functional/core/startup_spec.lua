@@ -1862,4 +1862,9 @@ describe('inccommand on ex mode', function()
                                                                   |
     ]])
   end)
+
+  it('fails with missing argument for --remote-ssh', function()
+    local p = n.spawn_wait { args = { '--remote-ssh' } }
+    eq(1, p.status)
+  end)
 end)

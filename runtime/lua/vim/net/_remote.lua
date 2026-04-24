@@ -83,16 +83,20 @@ local function exec_ssh(ssh_cmd, wait_mode)
           io.stderr:write('\r' .. vim.trim(text) .. ' ')
           io.stderr:flush()
 
-          os.execute('stty -echo < /dev/tty 2>/dev/null')
-          local f = io.open('/dev/tty', 'r')
           local input = nil
-          if f then
-            input = f:read('*l')
-            f:close()
-          else
+          if vim.fn.has('win32') == 1 then
             input = io.read('*l')
+          else
+            os.execute('stty -echo < /dev/tty 2>/dev/null')
+            local f = io.open('/dev/tty', 'r')
+            if f then
+              input = f:read('*l')
+              f:close()
+            else
+              input = io.read('*l')
+            end
+            os.execute('stty echo < /dev/tty 2>/dev/null')
           end
-          os.execute('stty echo < /dev/tty 2>/dev/null')
           io.stderr:write('\n')
 
           if input then
