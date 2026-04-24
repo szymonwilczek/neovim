@@ -530,8 +530,10 @@ local function check_external_tools()
     if ssh_job.code == 0 then
       health.ok(('%s (%s)'):format(ssh_out, ssh_path))
 
+      ---@type string?
       local version_match = ssh_out:match('OpenSSH_([%d%.]+)')
       if version_match then
+        ---@type string?
         local major = version_match:match('^(%d+)')
         if vim.fn.has('win32') == 1 then
           health.warn(

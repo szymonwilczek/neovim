@@ -238,6 +238,7 @@ end
 ---@return table
 function M.parse_uri(str)
   local uri = {}
+  ---@type string?
   local scheme_match = str:match('^ssh://(.*)')
   if scheme_match then
     str = scheme_match

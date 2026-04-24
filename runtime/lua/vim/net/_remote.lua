@@ -2,8 +2,10 @@ local M = {}
 
 local ssh = require('vim.net._ssh')
 
+---@type string?
 local ssh_password = nil
 
+---@param uri {host:string, user?:string, port?:string}
 local function get_base_ssh_cmd(uri)
   local mux_path = string.format('/tmp/nvim_ssh_mux_%s_%%h_%%p_%%r', vim.env.USER or 'user')
   local ssh_cmd = {
@@ -20,6 +22,7 @@ local function get_base_ssh_cmd(uri)
     table.insert(ssh_cmd, '-p')
     table.insert(ssh_cmd, uri.port)
   end
+  ---@type string
   local target = uri.host
   if uri.user then
     target = uri.user .. '@' .. uri.host
@@ -38,16 +41,20 @@ local function get_base_ssh_cmd(uri)
   return ssh_cmd, ssh_cmd_str
 end
 
---- @param ssh_cmd string[]
---- @param wait_mode boolean|string true to wait for exit, string to wait for specific output
---- @return table { code = number, stdout = string, job_id = number }
+---@param ssh_cmd string[]
+---@param wait_mode boolean|string true to wait for exit, string to wait for specific output
+---@return table { code = number, stdout = string, job_id = number }
 local function exec_ssh(ssh_cmd, wait_mode)
   local stdout_lines = {}
   local is_done = false
   local code = -1
+  ---@type string
   local buffer = ''
   local prompt_count = 0
 
+  ---@param j number
+  ---@param data string[]
+  ---@param _ any
   local on_stdout = function(j, data, _)
     if not data then
       return
@@ -83,6 +90,7 @@ local function exec_ssh(ssh_cmd, wait_mode)
           io.stderr:write('\r' .. vim.trim(text) .. ' ')
           io.stderr:flush()
 
+          ---@type string?
           local input = nil
           if vim.fn.has('win32') == 1 then
             input = io.read('*l')
@@ -100,9 +108,10 @@ local function exec_ssh(ssh_cmd, wait_mode)
           io.stderr:write('\n')
 
           if input then
-            input = input:gsub('\r', '')
-            ssh_password = input
-            vim.fn.chansend(j, input .. '\n')
+            ---@cast input string
+            local sanitized = input:gsub('\r', '')
+            ssh_password = sanitized
+            vim.fn.chansend(j, sanitized .. '\n')
           else
             vim.fn.jobstop(j)
           end
@@ -111,14 +120,17 @@ local function exec_ssh(ssh_cmd, wait_mode)
             vim.fn.chansend(j, ssh_password .. '\n')
             return
           end
-          vim.ui.input({ prompt = vim.trim(text) .. ' ', secret = true }, function(input)
+          ---@param input string?
+          local function on_input(input)
             if input then
+              ---@cast input string
               ssh_password = input
               vim.fn.chansend(j, input .. '\n')
             else
               vim.fn.jobstop(j)
             end
-          end)
+          end
+          vim.ui.input({ prompt = vim.trim(text) .. ' ', secret = true }, on_input)
         end
       end)
     end
@@ -178,8 +190,8 @@ local function exec_ssh(ssh_cmd, wait_mode)
   end
 end
 
---- @param uri table
---- @return string os, string arch
+---@param uri {host:string, user?:string, port?:string}
+---@return string os, string arch
 function M.get_system_info(uri)
   local ssh_cmd = get_base_ssh_cmd(uri)
   table.insert(ssh_cmd, 'uname -s && uname -m')
@@ -203,7 +215,9 @@ function M.get_system_info(uri)
     error('Unexpected output from system info detection: ' .. obj.stdout)
   end
 
+  ---@type string
   local os = valid_lines[#valid_lines - 1]:lower()
+  ---@type string
   local arch = valid_lines[#valid_lines]:lower()
 
   if os:match('msys') or os:match('windows') or os:match('mingw') or os:match('cygwin') then
@@ -216,6 +230,7 @@ end
 local function check_and_install(uri, os, arch)
   local version_out = vim.api.nvim_exec2('version', { output = true }).output
   local nvim_version = version_out:match('NVIM (v[^\n]+)') or 'unknown'
+  ---@type boolean
   local is_nightly = vim.version().prerelease
 
   local os_map = { linux = 'linux', darwin = 'macos' }
@@ -276,6 +291,7 @@ local function check_and_install(uri, os, arch)
   end
 end
 
+---@param uri {host:string, user?:string, port?:string}
 local function sync_config(uri)
   local config_dir = vim.fn.stdpath('config')
   if vim.fn.isdirectory(config_dir) == 0 then
@@ -284,11 +300,6 @@ local function sync_config(uri)
 
   local remote_base_dir = '/tmp/.nvim-remote-' .. (vim.env.USER or 'user')
   local remote_config_dir = remote_base_dir .. '/nvim'
-
-  local target = uri.host
-  if uri.user then
-    target = uri.user .. '@' .. uri.host
-  end
 
   local tar_cmd_str = 'tar -czC '
     .. vim.fn.shellescape(config_dir)
