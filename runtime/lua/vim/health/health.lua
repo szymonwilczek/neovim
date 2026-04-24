@@ -529,6 +529,33 @@ local function check_external_tools()
     local ssh_out = vim.trim(ssh_job.stderr or '')
     if ssh_job.code == 0 then
       health.ok(('%s (%s)'):format(ssh_out, ssh_path))
+
+      local version_match = ssh_out:match('OpenSSH_([%d%.]+)')
+      if version_match then
+        local major = version_match:match('^(%d+)')
+        if vim.fn.has('win32') == 1 then
+          health.warn(
+            'Win32-OpenSSH does not support ControlMaster (multiplexing). Remote SSH features might be degraded or unsupported.'
+          )
+        elseif major and tonumber(major) >= 4 then
+          health.ok('OpenSSH version supports multiplexing')
+        else
+          health.warn(
+            'OpenSSH version is older than 4.0. Multiplexing is not supported, remote connections may be slow or fail.'
+          )
+        end
+      else
+        health.warn('Could not determine OpenSSH version. Multiplexing support is unknown.')
+      end
+
+      if vim.fn.has('win32') == 0 then
+        local tmp_stat = vim.uv.fs_stat('/tmp')
+        if tmp_stat and tmp_stat.type == 'directory' and vim.uv.fs_access('/tmp', 'W') then
+          health.ok('/tmp is writable (required for SSH multiplexing sockets)')
+        else
+          health.error('/tmp is not a writable directory. SSH multiplexing will fail.')
+        end
+      end
     else
       health.warn('ssh is installed but failed to run `ssh -V`', { ssh_job.stderr })
     end
