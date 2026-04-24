@@ -3,18 +3,94 @@ local n = require('test.functional.testnvim')()
 
 local clear = n.clear
 local eq = t.eq
+local is_os = t.is_os
+local skip = t.skip
 
 describe('vim.net._remote', function()
   local fake_bin_dir
 
   local function setup_fake_ssh(behavior)
     behavior = behavior or {}
+    local is_windows = package.config:sub(1, 1) == '\\'
     fake_bin_dir = t.tmpname()
     os.remove(fake_bin_dir)
     vim.uv.fs_mkdir(fake_bin_dir, 511)
-    local fake_ssh_path = fake_bin_dir .. '/ssh'
+    local fake_ssh_path = fake_bin_dir .. (is_windows and '/ssh.cmd' or '/ssh')
 
-    local script = [=[
+    local script
+    if is_windows then
+      script = [=[
+@echo off
+setlocal EnableDelayedExpansion
+set "ARGS=%*"
+
+echo(!ARGS! | findstr /C:"uname -s && uname -m" >nul
+if not errorlevel 1 (
+]=] .. (behavior.uname or [=[
+  echo Linux
+  echo x86_64
+]=]) .. [=[
+  exit /b 0
+)
+
+echo(!ARGS! | findstr /C:"-L" >nul
+if not errorlevel 1 (
+  echo(!ARGS! | findstr /C:"ControlMaster" >nul
+  if errorlevel 1 (
+    echo FAIL: Multiplexing flags missing! 1>&2
+    exit /b 1
+  )
+]=] .. (behavior.tunnel or [=[
+  echo Password: 1>&2
+  set /p PASS=
+  if not "!PASS!"=="secret" (
+    echo Access denied 1>&2
+    exit /b 1
+  )
+  set "SOCK="
+  set "NEXT_L="
+  for %%A in (%*) do (
+    if defined NEXT_L (
+      set "SOCK=%%~A"
+      set "NEXT_L="
+    ) else if "%%~A"=="-L" (
+      set "NEXT_L=1"
+    )
+  )
+  if not defined SOCK (
+    echo Unexpected SSH command: !ARGS! 1>&2
+    exit /b 1
+  )
+  > "!SOCK!" type NUL
+  exit /b 0
+]=]) .. [=[
+)
+
+echo(!ARGS! | findstr /C:"TARGET_VER" >nul
+if not errorlevel 1 (
+]=] .. (behavior.installer or [=[
+  echo Installing Neovim... 1>&2
+  exit /b 0
+]=]) .. [=[
+)
+
+echo(!ARGS! | findstr /C:"mkdir -p" >nul
+if not errorlevel 1 (
+  echo Config synced! 1>&2
+  exit /b 0
+)
+
+echo(!ARGS! | findstr /C:"-O" >nul
+if not errorlevel 1 (
+  echo(!ARGS! | findstr /C:"exit" >nul
+  if not errorlevel 1 exit /b 0
+)
+
+echo Unexpected SSH command: !ARGS! 1>&2
+exit /b 1
+]=]
+    else
+      script = [=[
 #!/usr/bin/env bash
 ARGS="$*"
 
@@ -67,16 +143,19 @@ fi
 echo "Unexpected SSH command: $ARGS" >&2
 exit 1
 ]=]
+    end
     t.write_file(fake_ssh_path, script)
     vim.uv.fs_chmod(fake_ssh_path, 493)
 
+    local path_sep = is_windows and ';' or ':'
     n.exec_lua(string.format(
       [[
       _G.orig_path = vim.fn.getenv('PATH')
-      vim.fn.setenv('PATH', %q .. ':' .. _G.orig_path)
+      vim.fn.setenv('PATH', %q .. %q .. _G.orig_path)
       vim.fn.setenv('NVIM_TEST_MOCK_UI', '1')
     ]],
-      fake_bin_dir
+      fake_bin_dir,
+      path_sep
     ))
   end
 
@@ -100,6 +179,7 @@ exit 1
 
   describe('Remote Engine (Introspection)', function()
     it('detects linux x86_64 successfully', function()
+      skip(is_os('win'), 'remote-ssh engine is POSIX-only')
       setup_fake_ssh({
         uname = [[
           echo "Linux"
@@ -114,6 +194,7 @@ exit 1
     end)
 
     it('detects macos arm64 successfully', function()
+      skip(is_os('win'), 'remote-ssh engine is POSIX-only')
       setup_fake_ssh({
         uname = [[
           echo "Darwin"
@@ -128,6 +209,7 @@ exit 1
     end)
 
     it('fails fast on Windows', function()
+      skip(is_os('win'), 'remote-ssh engine is POSIX-only')
       setup_fake_ssh({
         uname = [[
           echo "MSYS_NT-10.0-19045"
@@ -146,6 +228,7 @@ exit 1
 
   describe('Remote Engine (Orchestration)', function()
     it('injects password and returns local socket', function()
+      skip(is_os('win'), 'remote-ssh engine is POSIX-only')
       setup_fake_ssh()
       local res = n.exec_lua([[
         _G.inputs_requested = {}
