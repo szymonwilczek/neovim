@@ -521,6 +521,23 @@ local function check_external_tools()
       'Install curl using your package manager.',
     })
   end
+
+  if vim.fn.executable('ssh') == 1 then
+    local ssh_path = vim.fn.exepath('ssh')
+    local ssh_job = vim.system({ ssh_path, '-V' }, { text = true }):wait()
+    -- ssh -V prints version to stderr
+    local ssh_out = vim.trim(ssh_job.stderr or '')
+    if ssh_job.code == 0 then
+      health.ok(('%s (%s)'):format(ssh_out, ssh_path))
+    else
+      health.warn('ssh is installed but failed to run `ssh -V`', { ssh_job.stderr })
+    end
+  else
+    health.warn('ssh not found', {
+      'Required for remote SSH connections (--remote-ssh).',
+      'Install ssh using your package manager.',
+    })
+  end
 end
 
 local function detect_terminal()
