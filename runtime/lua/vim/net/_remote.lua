@@ -5,9 +5,9 @@ local ssh = require('vim.net._ssh')
 local ssh_password = nil
 
 --- @param ssh_cmd string[]
---- @param wait boolean
+--- @param wait_mode boolean|string true to wait for exit, string to wait for specific output
 --- @return table { code = number, stdout = string, job_id = number }
-local function exec_ssh(ssh_cmd, wait)
+local function exec_ssh(ssh_cmd, wait_mode)
   local stdout_lines = {}
   local is_done = false
   local code = -1
@@ -91,8 +91,14 @@ local function exec_ssh(ssh_cmd, wait)
     error('Failed to start SSH job')
   end
 
-  if wait then
+  if wait_mode then
     local success = vim.wait(300000, function()
+      if type(wait_mode) == 'string' then
+        local output = table.concat(stdout_lines, '\n') .. buffer
+        if output:match(wait_mode) then
+          return true
+        end
+      end
       return is_done
     end, 50)
     if not success then
@@ -306,25 +312,40 @@ function M.start(uri_str)
   end
   table.insert(ssh_cmd, target)
 
-  local remote_cmd = '~/.local/bin/nvim --headless --listen /tmp/nvim.sock'
+  local env_vars = ''
   if remote_base_dir then
-    remote_cmd = 'env XDG_CONFIG_HOME=' .. vim.fn.shellescape(remote_base_dir) .. ' ' .. remote_cmd
+    env_vars = 'env XDG_CONFIG_HOME=' .. vim.fn.shellescape(remote_base_dir)
   end
+
+  local remote_cmd = string.format(
+    [[
+    rm -f /tmp/nvim.sock
+    %s ~/.local/bin/nvim --headless --listen /tmp/nvim.sock &
+    NVIM_PID=$!
+    while [ ! -S /tmp/nvim.sock ]; do
+      if ! kill -0 $NVIM_PID 2>/dev/null; then
+        echo "NVIM_CRASHED"
+        exit 1
+      fi
+      sleep 0.1
+    done
+    echo "NVIM_READY"
+    wait $NVIM_PID
+  ]],
+    env_vars
+  )
+
+  table.insert(ssh_cmd, 'bash')
+  table.insert(ssh_cmd, '-c')
   table.insert(ssh_cmd, remote_cmd)
 
-  local obj = exec_ssh(ssh_cmd, false)
-  local job_id = obj.job_id
+  local obj = exec_ssh(ssh_cmd, 'NVIM_READY')
 
-  local success = vim.wait(15000, function()
-    return vim.uv.fs_stat(local_sock) ~= nil
-  end, 200)
-
-  if success then
-    return local_sock
+  if obj.stdout:match('NVIM_CRASHED') then
+    error('Remote Neovim crashed during startup')
   end
 
-  vim.fn.jobstop(job_id)
-  error('Socket not ready')
+  return local_sock
 end
 
 return M
