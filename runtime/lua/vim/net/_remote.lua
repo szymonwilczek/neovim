@@ -210,11 +210,9 @@ function M.get_system_info(uri)
 end
 
 local function check_and_install(uri, os, arch)
-  local v = vim.version()
-  local version_str = string.format('v%d.%d.%d', v.major, v.minor, v.patch)
-  if v.prerelease then
-    version_str = 'nightly'
-  end
+  local version_out = vim.api.nvim_exec2('version', { output = true }).output
+  local nvim_version = version_out:match('NVIM (v[^\n]+)') or 'unknown'
+  local is_nightly = vim.version().prerelease
 
   local os_map = { linux = 'linux', darwin = 'macos' }
   local arch_map = { x86_64 = 'x86_64', aarch64 = 'arm64', arm64 = 'arm64' }
@@ -228,7 +226,7 @@ local function check_and_install(uri, os, arch)
   local release_file = string.format('nvim-%s-%s.tar.gz', target_os, target_arch)
   local release_url =
     string.format('https://github.com/neovim/neovim/releases/latest/download/%s', release_file)
-  if version_str == 'nightly' then
+  if is_nightly then
     release_url =
       string.format('https://github.com/neovim/neovim/releases/download/nightly/%s', release_file)
   end
@@ -243,8 +241,8 @@ local function check_and_install(uri, os, arch)
     mkdir -p "$INSTALL_DIR"
 
     if [ -x "$BIN_DIR/nvim" ]; then
-      CURRENT_VER=$("$BIN_DIR/nvim" -v | head -n1 | grep -o 'v[0-9]\+\.[0-9]\+\.[0-9]\+')
-      if [ "$CURRENT_VER" = "$TARGET_VER" ] || [ "$TARGET_VER" = "nightly" ]; then
+      CURRENT_VER=$("$BIN_DIR/nvim" -v | head -n1 | sed 's/^NVIM //')
+      if [ "$CURRENT_VER" = "$TARGET_VER" ]; then
         exit 0
       fi
     fi
@@ -256,7 +254,7 @@ local function check_and_install(uri, os, arch)
     tar -xzf nvim.tar.gz || exit 1
     ln -sf "$INSTALL_DIR/nvim-%s-%s/bin/nvim" "$BIN_DIR/nvim"
   ]],
-    version_str,
+    nvim_version,
     release_url,
     release_url,
     target_os,
