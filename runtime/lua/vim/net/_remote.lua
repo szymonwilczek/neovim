@@ -12,6 +12,7 @@ local function exec_ssh(ssh_cmd, wait_mode)
   local is_done = false
   local code = -1
   local buffer = ''
+  local prompt_count = 0
 
   local on_stdout = function(j, data, _)
     if not data then
@@ -28,6 +29,15 @@ local function exec_ssh(ssh_cmd, wait_mode)
 
     local text = table.concat(data, '\n')
     if text:match('[Pp]assword:') or text:match('passphrase') then
+      prompt_count = prompt_count + 1
+      if prompt_count > 1 then
+        ssh_password = nil
+        io.stderr:write('\n[Remote SSH] Authentication failed! Incorrect password.\n')
+        io.stderr:flush()
+        vim.fn.jobstop(j)
+        os.exit(1)
+      end
+
       vim.schedule(function()
         local is_headless = #vim.api.nvim_list_uis() == 0 and vim.env.NVIM_TEST_MOCK_UI ~= '1'
         if is_headless then
@@ -113,11 +123,14 @@ local function exec_ssh(ssh_cmd, wait_mode)
 
     if code ~= 0 then
       if clean_stdout:match('Permission denied') or clean_stdout:match('Connection closed') then
-        io.stderr:write(
-          '\n[Remote SSH] Authentication failed! Please check your password or SSH keys.\n'
-        )
-        io.stderr:flush()
-        ssh_password = nil
+        if prompt_count == 0 then
+          io.stderr:write(
+            '\n[Remote SSH] Authentication failed! Please check your password or SSH keys.\n'
+          )
+          io.stderr:flush()
+          ssh_password = nil
+          os.exit(1)
+        end
       end
     end
 
