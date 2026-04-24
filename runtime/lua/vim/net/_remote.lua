@@ -4,6 +4,40 @@ local ssh = require('vim.net._ssh')
 
 local ssh_password = nil
 
+local function get_base_ssh_cmd(uri)
+  local mux_path = string.format('/tmp/nvim_ssh_mux_%s_%%h_%%p_%%r', vim.env.USER or 'user')
+  local ssh_cmd = {
+    'ssh',
+    '-T',
+    '-o',
+    'ControlMaster=auto',
+    '-o',
+    'ControlPath=' .. mux_path,
+    '-o',
+    'ControlPersist=10m',
+  }
+  if uri.port then
+    table.insert(ssh_cmd, '-p')
+    table.insert(ssh_cmd, uri.port)
+  end
+  local target = uri.host
+  if uri.user then
+    target = uri.user .. '@' .. uri.host
+  end
+  table.insert(ssh_cmd, target)
+
+  local ssh_cmd_str = string.format(
+    'ssh -T -o ControlMaster=auto -o ControlPath=%s -o ControlPersist=10m ',
+    vim.fn.shellescape(mux_path)
+  )
+  if uri.port then
+    ssh_cmd_str = ssh_cmd_str .. '-p ' .. vim.fn.shellescape(uri.port) .. ' '
+  end
+  ssh_cmd_str = ssh_cmd_str .. vim.fn.shellescape(target)
+
+  return ssh_cmd, ssh_cmd_str
+end
+
 --- @param ssh_cmd string[]
 --- @param wait_mode boolean|string true to wait for exit, string to wait for specific output
 --- @return table { code = number, stdout = string, job_id = number }
@@ -143,16 +177,7 @@ end
 --- @param uri table
 --- @return string os, string arch
 function M.get_system_info(uri)
-  local ssh_cmd = { 'ssh', '-T' }
-  if uri.port then
-    table.insert(ssh_cmd, '-p')
-    table.insert(ssh_cmd, uri.port)
-  end
-  local target = uri.host
-  if uri.user then
-    target = uri.user .. '@' .. uri.host
-  end
-  table.insert(ssh_cmd, target)
+  local ssh_cmd = get_base_ssh_cmd(uri)
   table.insert(ssh_cmd, 'uname -s && uname -m')
 
   local obj = exec_ssh(ssh_cmd, true)
@@ -240,16 +265,7 @@ local function check_and_install(uri, os, arch)
     target_arch
   )
 
-  local ssh_cmd = { 'ssh', '-T' }
-  if uri.port then
-    table.insert(ssh_cmd, '-p')
-    table.insert(ssh_cmd, uri.port)
-  end
-  local target = uri.host
-  if uri.user then
-    target = uri.user .. '@' .. uri.host
-  end
-  table.insert(ssh_cmd, target)
+  local ssh_cmd = get_base_ssh_cmd(uri)
   table.insert(ssh_cmd, remote_script)
 
   local obj = exec_ssh(ssh_cmd, true)
@@ -282,16 +298,8 @@ local function sync_config(uri)
     vim.fn.shellescape(remote_config_dir)
   )
 
-  local ssh_cmd_str = 'ssh -T '
-  if uri.port then
-    ssh_cmd_str = ssh_cmd_str .. '-p ' .. vim.fn.shellescape(uri.port) .. ' '
-  end
-  ssh_cmd_str = ssh_cmd_str
-    .. vim.fn.shellescape(target)
-    .. ' '
-    .. vim.fn.shellescape(remote_script)
-
-  local pipeline = tar_cmd_str .. ' | ' .. ssh_cmd_str
+  local _, ssh_cmd_str = get_base_ssh_cmd(uri)
+  local pipeline = tar_cmd_str .. ' | ' .. ssh_cmd_str .. ' ' .. vim.fn.shellescape(remote_script)
 
   io.stderr:write('Syncing config to remote host...\n')
   local obj = exec_ssh({ 'bash', '-c', pipeline }, true)
@@ -314,16 +322,9 @@ function M.start(uri_str)
 
   local local_sock = vim.fn.tempname() .. '_remote_nvim.sock'
 
-  local ssh_cmd = { 'ssh', '-T', '-L', local_sock .. ':/tmp/nvim.sock' }
-  if uri.port then
-    table.insert(ssh_cmd, '-p')
-    table.insert(ssh_cmd, uri.port)
-  end
-  local target = uri.host
-  if uri.user then
-    target = uri.user .. '@' .. uri.host
-  end
-  table.insert(ssh_cmd, target)
+  local ssh_cmd = get_base_ssh_cmd(uri)
+  table.insert(ssh_cmd, '-L')
+  table.insert(ssh_cmd, local_sock .. ':/tmp/nvim.sock')
 
   local env_vars = ''
   if remote_base_dir then
