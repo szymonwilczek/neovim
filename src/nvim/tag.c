@@ -3067,10 +3067,11 @@ static char *expand_tag_fname(char *fname, char *const tag_fname, const bool exp
   char *expanded_fname = NULL;
   expand_T xpc;
 
-  // Refuse to follow URLs from tag files.  Tag entries are expected
-  // to reference local source files; a URL would otherwise be passed
-  // to netrw and trigger a network request.
-  if (path_with_url(fname)) {
+  // Refuse to follow remote URLs from tag files. Tag entries are expected
+  // to reference local source files; a remote URL would otherwise be passed
+  // to netrw and trigger a network request. Local URL-like schemes
+  // registered via |BufReadCmd| (e.g. "man://") are allowed.
+  if (path_is_remote_url(fname)) {
     emsg(_(e_tag_file_entry_must_not_be_url));
     return NULL;
   }

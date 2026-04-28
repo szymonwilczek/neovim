@@ -1834,6 +1834,32 @@ int path_with_url(const char *fname)
   return path_is_url(p);
 }
 
+/// Check if "fname" starts with a URL scheme that netrw handles via a network
+/// fetch. Local URL-like schemes (e.g. "man://", "file://") are not matched.
+///
+/// Schemes mirror the network protocols in
+/// `runtime/pack/dist/opt/netrw/autoload/netrw.vim`.
+///
+/// "file://" is handled by netrw but resolves to a local path,
+/// so it is excluded here.
+///
+/// @param  fname  filename to test
+/// @return true if "fname" starts with a remote URL scheme.
+bool path_is_remote_url(const char *fname)
+  FUNC_ATTR_NONNULL_ALL
+{
+  static const char *const remote_schemes[] = {
+    "dav://", "davs://", "fetch://", "ftp://", "http://", "https://",
+    "rcp://", "rsync://", "scp://", "sftp://",
+  };
+  for (size_t i = 0; i < ARRAY_SIZE(remote_schemes); i++) {
+    if (STRNICMP(fname, remote_schemes[i], strlen(remote_schemes[i])) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool path_with_extension(const char *path, const char *extension)
   FUNC_ATTR_NONNULL_ALL
 {

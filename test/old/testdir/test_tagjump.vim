@@ -1762,4 +1762,25 @@ func Test_tagjump_refuse_url()
   let &tags = save_tags
 endfunc
 
+" Local URL-like schemes (e.g. man://, term://) are not netrw remote URLs and
+" must remain usable from tag files.  Regression test for #39461.
+func Test_tagjump_allow_local_url()
+  call writefile([
+        \ "XTagLocalURL\tman://ls(1)\t/^int main"
+        \ ], 'Xtags', 'D')
+  let save_tags = &tags
+  set tags=Xtags
+
+  " Only verify that E1576 is NOT raised; the tag itself may fail to
+  " resolve since man://ls(1) is not a real file in the test environment.
+  try
+    silent! tag XTagLocalURL
+  catch /E1576:/
+    call assert_report('E1576 raised for local man:// URL')
+  endtry
+
+  let &tags = save_tags
+  bwipe!
+endfunc
+
 " vim: shiftwidth=2 sts=2 expandtab
